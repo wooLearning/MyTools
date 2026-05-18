@@ -1,0 +1,19 @@
+{
+  "ToolName": "Remote Access Manager",
+  "JumpAlias": "remote-jump",
+  "JumpHost": "jump.example.internal",
+  "JumpUser": "your-jump-user",
+  "TargetAlias": "remote-target",
+  "TargetHost": "target.example.internal",
+  "TargetUser": "your-target-user",
+  "TargetPath": "/home/your-target-user",
+  "DriveLetter": "T:",
+  "MountCheckPath": "workspace",
+  "IdentityFile": "",
+  "LocalSshPort": 22220,
+  "RemoteSshPort": 22,
+  "LocalVncPort": 15917,
+  "RemoteVncPort": 5917,
+  "VncDisplay": 17,
+  "VncPassword": ""
+}

@@ -1,0 +1,17 @@
+# Local planning scratchpad
+.planning/
+
+# Local runtime output
+**/logs/
+**/*.log
+**/*.tmp
+
+# Machine-local shortcuts and secrets
+**/*.lnk
+**/*.local.*
+**/*.secret.*
+
+# Remote Access Manager local-only files
+remote_access_manager/config.local.json
+remote_access_manager/config.local.*.json
+remote_access_manager/archive/
