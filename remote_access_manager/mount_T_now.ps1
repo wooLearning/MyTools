@@ -48,6 +48,47 @@ function Stop-DriveMountProcesses {
         }
 }
 
+function Quote-ProcessArgument {
+    param([string] $Value)
+    if ($Value -notmatch '[\s"]') { return $Value }
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Start-SshfsProcess {
+    param(
+        [pscustomobject] $Config,
+        [string[]] $ArgumentList,
+        [string] $StdoutPath,
+        [string] $StderrPath
+    )
+
+    $envMap = Set-RemoteAccessAskPassEnvironment -Config $Config
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = [string]$Config.SshfsExe
+    $psi.Arguments = (($ArgumentList | ForEach-Object { Quote-ProcessArgument $_ }) -join " ")
+    $psi.WorkingDirectory = Split-Path -Parent $Config.SshfsExe
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    if ($Config.PSObject.Properties.Name -contains "TargetPassword" -and $Config.TargetPassword) {
+        $psi.RedirectStandardInput = $true
+    }
+    foreach ($key in $envMap.Keys) {
+        $psi.EnvironmentVariables[$key] = [string]$envMap[$key]
+    }
+    $psi.EnvironmentVariables["PATH"] = "C:\Program Files\SSHFS-Win\bin;$env:PATH"
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+    if ($process -and $psi.RedirectStandardInput) {
+        $process.StandardInput.WriteLine([string]$Config.TargetPassword)
+        $process.StandardInput.Close()
+    }
+
+    return $process
+}
+
 function Open-DriveIfRequested {
     if ($OpenExplorer) {
         explorer.exe (Get-RemoteAccessDriveRoot -Config $Config)
@@ -73,8 +114,8 @@ if (-not (Test-Port ([int]$Config.LocalSshPort))) {
     $jumpDestination = "{0}@{1}" -f $Config.JumpUser, $Config.JumpHost
     $tunnelOut = Join-Path $LogDir ("ssh_tunnel_{0}_out.log" -f $Config.LocalSshPort)
     $tunnelErr = Join-Path $LogDir ("ssh_tunnel_{0}_err.log" -f $Config.LocalSshPort)
-    Invoke-WithRemoteAccessEnvironment -Config $Config -Script {
-        $script:tunnelProc = Start-Process -FilePath $Config.SshExe `
+    $tunnelProc = Invoke-WithRemoteAccessEnvironment -Config $Config -Script {
+        Start-Process -FilePath $Config.SshExe `
             -ArgumentList @("-N", "-L", "127.0.0.1:$($Config.LocalSshPort):$($Config.TargetHost):$($Config.RemoteSshPort)", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", $jumpDestination) `
             -WindowStyle Hidden `
             -RedirectStandardOutput $tunnelOut `
@@ -125,20 +166,21 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
         "-o", ("volname={0}@{1}" -f $Config.TargetUser, $Config.TargetHost),
         "-o", "reconnect"
     )
+    if ($Config.PSObject.Properties.Name -contains "TargetPassword" -and $Config.TargetPassword) {
+        $args += @("-o", "password_stdin")
+    }
 
     $stdoutLog = Join-Path $LogDir ("sshfs_mount_{0}_out.log" -f ([guid]::NewGuid().ToString("N")))
     $stderrLog = Join-Path $LogDir ("sshfs_mount_{0}_err.log" -f ([guid]::NewGuid().ToString("N")))
-    $env:PATH = "C:\Program Files\SSHFS-Win\bin;$env:PATH"
+    $proc = Start-SshfsProcess -Config $Config -ArgumentList $args -StdoutPath $stdoutLog -StderrPath $stderrLog
 
-    Invoke-WithRemoteAccessEnvironment -Config $Config -Script {
-        $script:proc = Start-Process `
-            -FilePath $Config.SshfsExe `
-            -ArgumentList $args `
-            -WorkingDirectory (Split-Path -Parent $Config.SshfsExe) `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $stdoutLog `
-            -RedirectStandardError $stderrLog `
-            -PassThru
+    if (-not $proc) {
+        Log "ERROR: sshfs.exe did not start."
+        try {
+            $stderr = if (Test-Path -LiteralPath $stderrLog) { Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue } else { "" }
+            if ($stderr) { Log ("sshfs stderr: " + $stderr.Trim()) }
+        } catch {}
+        break
     }
 
     Log "Started sshfs.exe PID=$($proc.Id) with hidden file redirection."
@@ -153,7 +195,10 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
         if ($proc.HasExited) {
             Log "sshfs.exe exited early with code $($proc.ExitCode)."
             try {
-                $stderr = if (Test-Path -LiteralPath $stderrLog) { Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue } else { "" }
+                $stdout = $proc.StandardOutput.ReadToEnd()
+                $stderr = $proc.StandardError.ReadToEnd()
+                if ($stdout) { Set-Content -LiteralPath $stdoutLog -Value $stdout -Encoding UTF8 }
+                if ($stderr) { Set-Content -LiteralPath $stderrLog -Value $stderr -Encoding UTF8 }
                 if ($stderr) { Log ("sshfs stderr: " + $stderr.Trim()) }
             } catch {}
             break

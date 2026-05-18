@@ -48,10 +48,50 @@ function Add-PasswordToggle {
     $button.Text = "Show"
     $button.Location = New-Object System.Drawing.Point($X, $Y)
     $button.Size = New-Object System.Drawing.Size(58, 23)
+    $button.Tag = $Box
     $button.Add_Click({
-        $Box.UseSystemPasswordChar = -not $Box.UseSystemPasswordChar
-        $button.Text = if ($Box.UseSystemPasswordChar) { "Show" } else { "Hide" }
+        param($Sender, $EventArgs)
+        $target = [System.Windows.Forms.TextBox]$Sender.Tag
+        $target.UseSystemPasswordChar = -not $target.UseSystemPasswordChar
+        $Sender.Text = if ($target.UseSystemPasswordChar) { "Show" } else { "Hide" }
+        $target.Refresh()
     })
+    $form.Controls.Add($button)
+}
+
+function Add-FileBrowseButton {
+    param(
+        [System.Windows.Forms.TextBox] $Box,
+        [int] $X,
+        [int] $Y
+    )
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = "Browse"
+    $button.Location = New-Object System.Drawing.Point($X, $Y)
+    $button.Size = New-Object System.Drawing.Size(70, 23)
+    $button.Add_Click({
+        $dialog = New-Object System.Windows.Forms.OpenFileDialog
+        $dialog.Title = "Select SSH key file"
+        $dialog.InitialDirectory = Join-Path $env:USERPROFILE ".ssh"
+        $dialog.Filter = "SSH key files|id_*;*.pem;*.key|All files|*.*"
+        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $Box.Text = $dialog.FileName
+        }
+    })
+    $form.Controls.Add($button)
+}
+
+function Add-ClearButton {
+    param(
+        [System.Windows.Forms.TextBox] $Box,
+        [int] $X,
+        [int] $Y
+    )
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = "Clear"
+    $button.Location = New-Object System.Drawing.Point($X, $Y)
+    $button.Size = New-Object System.Drawing.Size(58, 23)
+    $button.Add_Click({ $Box.Text = "" })
     $form.Controls.Add($button)
 }
 
@@ -95,7 +135,6 @@ function Run-HiddenPowerShell {
 }
 
 function Update-ConfigFromForm {
-    $Config.ToolName = $txtToolName.Text.Trim()
     $Config.JumpHost = ($txtJumpHost.Text.Trim() -replace ',', '.')
     $Config.JumpUser = $txtJumpUser.Text.Trim()
     $Config.TargetHost = ($txtTargetHost.Text.Trim() -replace ',', '.')
@@ -104,6 +143,8 @@ function Update-ConfigFromForm {
     $Config.DriveLetter = $txtDrive.Text.Trim()
     $Config.MountCheckPath = $txtCheckPath.Text.Trim()
     $Config.IdentityFile = $txtIdentity.Text.Trim()
+    $txtJumpHost.Text = $Config.JumpHost
+    $txtTargetHost.Text = $Config.TargetHost
 }
 
 function Get-RunEnvironment {
@@ -134,7 +175,7 @@ function Refresh-Status {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = $Config.ToolName
-$form.Size = New-Object System.Drawing.Size(560, 520)
+$form.Size = New-Object System.Drawing.Size(560, 485)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -146,76 +187,74 @@ $title.AutoSize = $true
 $title.Location = New-Object System.Drawing.Point(18, 16)
 $form.Controls.Add($title)
 
-Add-Label "Tool name" 20 55
-$txtToolName = New-TextBox 120 52 390 $Config.ToolName
-$form.Controls.Add($txtToolName)
-
-Add-Label "Jump host" 20 88
-$txtJumpHost = New-TextBox 120 85 160 $Config.JumpHost
+Add-Label "Jump host" 20 55
+$txtJumpHost = New-TextBox 120 52 160 $Config.JumpHost
 Add-History $txtJumpHost @($Config.JumpHost, "jump.example.internal")
 $form.Controls.Add($txtJumpHost)
 
-Add-Label "Jump user" 300 88
-$txtJumpUser = New-TextBox 380 85 130 $Config.JumpUser
+Add-Label "Jump user" 300 55
+$txtJumpUser = New-TextBox 380 52 130 $Config.JumpUser
 Add-History $txtJumpUser @($Config.JumpUser, "your-jump-user")
 $form.Controls.Add($txtJumpUser)
 
-Add-Label "Jump password" 20 121
-$txtJumpPassword = New-TextBox 120 118 95 "" -Password
+Add-Label "Jump password" 20 88
+$txtJumpPassword = New-TextBox 120 85 95 "" -Password
 $form.Controls.Add($txtJumpPassword)
-Add-PasswordToggle $txtJumpPassword 222 118
+Add-PasswordToggle $txtJumpPassword 222 85
 
-Add-Label "Target host" 20 157
-$txtTargetHost = New-TextBox 120 154 160 $Config.TargetHost
+Add-Label "Target host" 20 124
+$txtTargetHost = New-TextBox 120 121 160 $Config.TargetHost
 Add-History $txtTargetHost @($Config.TargetHost, "target.example.internal")
 $form.Controls.Add($txtTargetHost)
 
-Add-Label "Target user" 300 157
-$txtTargetUser = New-TextBox 380 154 130 $Config.TargetUser
+Add-Label "Target user" 300 124
+$txtTargetUser = New-TextBox 380 121 130 $Config.TargetUser
 Add-History $txtTargetUser @($Config.TargetUser, "your-target-user")
 $form.Controls.Add($txtTargetUser)
 
-Add-Label "Target password" 20 190
-$txtTargetPassword = New-TextBox 120 187 95 "" -Password
+Add-Label "Target password" 20 157
+$txtTargetPassword = New-TextBox 120 154 95 "" -Password
 $form.Controls.Add($txtTargetPassword)
-Add-PasswordToggle $txtTargetPassword 222 187
+Add-PasswordToggle $txtTargetPassword 222 154
 
-Add-Label "Remote path" 20 223
-$txtTargetPath = New-TextBox 120 220 260 $Config.TargetPath
+Add-Label "Remote path" 20 190
+$txtTargetPath = New-TextBox 120 187 260 $Config.TargetPath
 Add-History $txtTargetPath @($Config.TargetPath, "/home/your-target-user")
 $form.Controls.Add($txtTargetPath)
 
-Add-Label "Drive" 400 223
-$txtDrive = New-TextBox 450 220 60 $Config.DriveLetter
+Add-Label "Drive" 400 190
+$txtDrive = New-TextBox 450 187 60 $Config.DriveLetter
 Add-History $txtDrive @($Config.DriveLetter, "T:", "S:", "R:")
 $form.Controls.Add($txtDrive)
 
-Add-Label "Check path" 20 256
-$txtCheckPath = New-TextBox 120 253 160 $Config.MountCheckPath
+Add-Label "Check path" 20 223
+$txtCheckPath = New-TextBox 120 220 160 $Config.MountCheckPath
 Add-History $txtCheckPath @($Config.MountCheckPath, "workspace")
 $form.Controls.Add($txtCheckPath)
 
-Add-Label "SSH key" 300 256
-$txtIdentity = New-TextBox 380 253 130 $Config.IdentityFile
+Add-Label "SSH key" 300 223
+$txtIdentity = New-TextBox 380 220 130 $Config.IdentityFile
 $form.Controls.Add($txtIdentity)
+Add-FileBrowseButton $txtIdentity 380 248
+Add-ClearButton $txtIdentity 452 248
 
-Add-Label "VNC password" 20 289
-$txtVncPassword = New-TextBox 120 286 95 "" -Password
+Add-Label "VNC password" 20 256
+$txtVncPassword = New-TextBox 120 253 95 "" -Password
 $form.Controls.Add($txtVncPassword)
-Add-PasswordToggle $txtVncPassword 222 286
+Add-PasswordToggle $txtVncPassword 222 253
 
 $statusBox = New-Object System.Windows.Forms.TextBox
 $statusBox.Multiline = $true
 $statusBox.ReadOnly = $true
 $statusBox.ScrollBars = "Vertical"
 $statusBox.Font = New-Object System.Drawing.Font("Consolas", 10)
-$statusBox.Location = New-Object System.Drawing.Point(20, 325)
+$statusBox.Location = New-Object System.Drawing.Point(20, 292)
 $statusBox.Size = New-Object System.Drawing.Size(490, 78)
 $form.Controls.Add($statusBox)
 
 $btnMount = New-Object System.Windows.Forms.Button
 $btnMount.Text = "Connect"
-$btnMount.Location = New-Object System.Drawing.Point(20, 420)
+$btnMount.Location = New-Object System.Drawing.Point(20, 387)
 $btnMount.Size = New-Object System.Drawing.Size(95, 34)
 $btnMount.Add_Click({
     Update-ConfigFromForm
@@ -232,7 +271,7 @@ $form.Controls.Add($btnMount)
 
 $btnUnmount = New-Object System.Windows.Forms.Button
 $btnUnmount.Text = "Disconnect"
-$btnUnmount.Location = New-Object System.Drawing.Point(125, 420)
+$btnUnmount.Location = New-Object System.Drawing.Point(125, 387)
 $btnUnmount.Size = New-Object System.Drawing.Size(95, 34)
 $btnUnmount.Add_Click({
     Update-ConfigFromForm
@@ -249,7 +288,7 @@ $form.Controls.Add($btnUnmount)
 
 $btnOpenDrive = New-Object System.Windows.Forms.Button
 $btnOpenDrive.Text = "Open Drive"
-$btnOpenDrive.Location = New-Object System.Drawing.Point(230, 420)
+$btnOpenDrive.Location = New-Object System.Drawing.Point(230, 387)
 $btnOpenDrive.Size = New-Object System.Drawing.Size(95, 34)
 $btnOpenDrive.Add_Click({
     Update-ConfigFromForm
@@ -263,7 +302,7 @@ $form.Controls.Add($btnOpenDrive)
 
 $btnVnc = New-Object System.Windows.Forms.Button
 $btnVnc.Text = "Open VNC"
-$btnVnc.Location = New-Object System.Drawing.Point(335, 420)
+$btnVnc.Location = New-Object System.Drawing.Point(335, 387)
 $btnVnc.Size = New-Object System.Drawing.Size(80, 34)
 $btnVnc.Add_Click({
     Update-ConfigFromForm
@@ -275,7 +314,7 @@ $form.Controls.Add($btnVnc)
 
 $btnRefresh = New-Object System.Windows.Forms.Button
 $btnRefresh.Text = "Refresh"
-$btnRefresh.Location = New-Object System.Drawing.Point(425, 420)
+$btnRefresh.Location = New-Object System.Drawing.Point(425, 387)
 $btnRefresh.Size = New-Object System.Drawing.Size(85, 34)
 $btnRefresh.Add_Click({ Refresh-Status })
 $form.Controls.Add($btnRefresh)
