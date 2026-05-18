@@ -38,6 +38,23 @@ function New-TextBox {
     return $box
 }
 
+function Add-PasswordToggle {
+    param(
+        [System.Windows.Forms.TextBox] $Box,
+        [int] $X,
+        [int] $Y
+    )
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = "Show"
+    $button.Location = New-Object System.Drawing.Point($X, $Y)
+    $button.Size = New-Object System.Drawing.Size(58, 23)
+    $button.Add_Click({
+        $Box.UseSystemPasswordChar = -not $Box.UseSystemPasswordChar
+        $button.Text = if ($Box.UseSystemPasswordChar) { "Show" } else { "Hide" }
+    })
+    $form.Controls.Add($button)
+}
+
 function Add-Label {
     param([string] $Text, [int] $X, [int] $Y)
     $label = New-Object System.Windows.Forms.Label
@@ -79,9 +96,9 @@ function Run-HiddenPowerShell {
 
 function Update-ConfigFromForm {
     $Config.ToolName = $txtToolName.Text.Trim()
-    $Config.JumpHost = $txtJumpHost.Text.Trim()
+    $Config.JumpHost = ($txtJumpHost.Text.Trim() -replace ',', '.')
     $Config.JumpUser = $txtJumpUser.Text.Trim()
-    $Config.TargetHost = $txtTargetHost.Text.Trim()
+    $Config.TargetHost = ($txtTargetHost.Text.Trim() -replace ',', '.')
     $Config.TargetUser = $txtTargetUser.Text.Trim()
     $Config.TargetPath = $txtTargetPath.Text.Trim()
     $Config.DriveLetter = $txtDrive.Text.Trim()
@@ -144,8 +161,9 @@ Add-History $txtJumpUser @($Config.JumpUser, "your-jump-user")
 $form.Controls.Add($txtJumpUser)
 
 Add-Label "Jump password" 20 121
-$txtJumpPassword = New-TextBox 120 118 160 "" -Password
+$txtJumpPassword = New-TextBox 120 118 95 "" -Password
 $form.Controls.Add($txtJumpPassword)
+Add-PasswordToggle $txtJumpPassword 222 118
 
 Add-Label "Target host" 20 157
 $txtTargetHost = New-TextBox 120 154 160 $Config.TargetHost
@@ -158,8 +176,9 @@ Add-History $txtTargetUser @($Config.TargetUser, "your-target-user")
 $form.Controls.Add($txtTargetUser)
 
 Add-Label "Target password" 20 190
-$txtTargetPassword = New-TextBox 120 187 160 "" -Password
+$txtTargetPassword = New-TextBox 120 187 95 "" -Password
 $form.Controls.Add($txtTargetPassword)
+Add-PasswordToggle $txtTargetPassword 222 187
 
 Add-Label "Remote path" 20 223
 $txtTargetPath = New-TextBox 120 220 260 $Config.TargetPath
@@ -181,8 +200,9 @@ $txtIdentity = New-TextBox 380 253 130 $Config.IdentityFile
 $form.Controls.Add($txtIdentity)
 
 Add-Label "VNC password" 20 289
-$txtVncPassword = New-TextBox 120 286 160 "" -Password
+$txtVncPassword = New-TextBox 120 286 95 "" -Password
 $form.Controls.Add($txtVncPassword)
+Add-PasswordToggle $txtVncPassword 222 286
 
 $statusBox = New-Object System.Windows.Forms.TextBox
 $statusBox.Multiline = $true

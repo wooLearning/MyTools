@@ -70,12 +70,25 @@ if (Test-Path $driveRoot) {
 
 if (-not (Test-Port ([int]$Config.LocalSshPort))) {
     Log "Starting SSH tunnel 127.0.0.1:$($Config.LocalSshPort) -> target SSH through jump host."
+    $jumpDestination = "{0}@{1}" -f $Config.JumpUser, $Config.JumpHost
+    $tunnelOut = Join-Path $LogDir ("ssh_tunnel_{0}_out.log" -f $Config.LocalSshPort)
+    $tunnelErr = Join-Path $LogDir ("ssh_tunnel_{0}_err.log" -f $Config.LocalSshPort)
     Invoke-WithRemoteAccessEnvironment -Config $Config -Script {
-        Start-Process -FilePath $Config.SshExe `
-            -ArgumentList @("-N", "-L", "127.0.0.1:$($Config.LocalSshPort):$($Config.TargetHost):$($Config.RemoteSshPort)", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", $Config.JumpAlias) `
-            -WindowStyle Hidden
+        $script:tunnelProc = Start-Process -FilePath $Config.SshExe `
+            -ArgumentList @("-N", "-L", "127.0.0.1:$($Config.LocalSshPort):$($Config.TargetHost):$($Config.RemoteSshPort)", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", $jumpDestination) `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $tunnelOut `
+            -RedirectStandardError $tunnelErr `
+            -PassThru
     }
     Start-Sleep -Seconds 5
+    if ($tunnelProc -and $tunnelProc.HasExited) {
+        Log "ssh tunnel process exited early with code $($tunnelProc.ExitCode)."
+        try {
+            $stderr = if (Test-Path -LiteralPath $tunnelErr) { Get-Content -LiteralPath $tunnelErr -Raw -ErrorAction SilentlyContinue } else { "" }
+            if ($stderr) { Log ("ssh tunnel stderr: " + $stderr.Trim()) }
+        } catch {}
+    }
 }
 
 if (-not (Test-Port ([int]$Config.LocalSshPort))) {

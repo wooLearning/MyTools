@@ -9,11 +9,12 @@ Write-Host 'Keep this window open while the drive is mounted.'
 Write-Host ''
 
 Invoke-WithRemoteAccessEnvironment -Config $Config -Script {
+  $jumpDestination = "{0}@{1}" -f $Config.JumpUser, $Config.JumpHost
   & $Config.SshExe `
     -N `
     -L "127.0.0.1:$($Config.LocalSshPort):$($Config.TargetHost):$($Config.RemoteSshPort)" `
     -o ExitOnForwardFailure=yes `
-    $Config.JumpAlias
+    $jumpDestination
 }
 
 Write-Host ''
