@@ -1,5 +1,4 @@
 ﻿param(
-    [switch]$PermanentDelete,
     [string]$SessionPath = ""
 )
 
