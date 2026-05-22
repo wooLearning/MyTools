@@ -12,6 +12,13 @@
 **/*.secret.*
 
 # Remote Access Manager local-only files
+04_remote_access_manager/config.local.json
+04_remote_access_manager/config.local.*.json
+04_remote_access_manager/config.secrets.json
+04_remote_access_manager/config.secrets.*.json
+04_remote_access_manager/archive/
 remote_access_manager/config.local.json
 remote_access_manager/config.local.*.json
+remote_access_manager/config.secrets.json
+remote_access_manager/config.secrets.*.json
 remote_access_manager/archive/

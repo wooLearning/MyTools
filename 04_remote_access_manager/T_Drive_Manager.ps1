@@ -1,9 +1,109 @@
 $ErrorActionPreference = "Continue"
 
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
+$env:PSExecutionPolicyPreference = "Bypass"
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+Add-Type -ReferencedAssemblies "System.Windows.Forms", "System.Drawing" -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+public class RemoteAccessTrayForm : Form {
+    private const int WM_CLOSE = 0x0010;
+    private const int WM_SYSCOMMAND = 0x0112;
+    private const int SC_CLOSE = 0xF060;
+
+    public bool AllowExit { get; set; }
+
+    protected override void WndProc(ref Message m) {
+        if (!AllowExit) {
+            if (m.Msg == WM_CLOSE) {
+                this.Hide();
+                return;
+            }
+            if (m.Msg == WM_SYSCOMMAND && ((m.WParam.ToInt32() & 0xFFF0) == SC_CLOSE)) {
+                this.Hide();
+                return;
+            }
+        }
+        base.WndProc(ref m);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e) {
+        if (!AllowExit) {
+            e.Cancel = true;
+            this.Hide();
+            return;
+        }
+        base.OnFormClosing(e);
+    }
+
+    protected override void OnClosing(CancelEventArgs e) {
+        if (!AllowExit) {
+            e.Cancel = true;
+            this.Hide();
+            return;
+        }
+        base.OnClosing(e);
+    }
+}
+
+public static class RemoteAccessNativeWindow {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
+}
+"@
+
+$currentProcess = [System.Diagnostics.Process]::GetCurrentProcess()
+if ($currentProcess.ProcessName -ieq "RemoteAccessManager") {
+    $currentPath = $currentProcess.MainModule.FileName
+    $otherManagers = @(
+        Get-CimInstance Win32_Process |
+            Where-Object {
+                $_.ProcessId -ne $currentProcess.Id -and
+                $_.Name -ieq "RemoteAccessManager.exe" -and
+                $_.ExecutablePath -eq $currentPath
+            }
+    )
+    if ($otherManagers.Count -gt 0) {
+        $existingWindow = [RemoteAccessNativeWindow]::FindWindow($null, "Remote Access Manager")
+        if ($existingWindow -ne [IntPtr]::Zero) {
+            [void][RemoteAccessNativeWindow]::ShowWindow($existingWindow, 9)
+            [void][RemoteAccessNativeWindow]::SetForegroundWindow($existingWindow)
+        }
+        return
+    }
+}
+
+$createdNew = $false
+$script:AppMutex = New-Object System.Threading.Mutex($true, "Local\RemoteAccessManager", [ref]$createdNew)
+if (-not $createdNew) {
+    $existingWindow = [RemoteAccessNativeWindow]::FindWindow($null, "Remote Access Manager")
+    if ($existingWindow -ne [IntPtr]::Zero) {
+        [void][RemoteAccessNativeWindow]::ShowWindow($existingWindow, 9)
+        [void][RemoteAccessNativeWindow]::SetForegroundWindow($existingWindow)
+    } else {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Remote Access Manager is already running. Check the tray icon.",
+            "Remote Access Manager",
+            "OK",
+            "Information"
+        ) | Out-Null
+    }
+    return
+}
 
 function Get-ToolRoot {
     $candidates = New-Object System.Collections.Generic.List[string]
@@ -42,6 +142,74 @@ $UnmountScript = Join-Path $Root "unmount_T.ps1"
 $OpenVncScript = Join-Path $Root "open_vnc_viewer.ps1"
 $RestoreScript = Join-Path $Root "restore_now.ps1"
 $Config = Get-RemoteAccessConfig
+
+function Get-RemoteAccessSecretsPath {
+    Join-Path $Root "config.secrets.json"
+}
+
+function Protect-RemoteAccessSecret {
+    param([string] $Value)
+    if ([string]::IsNullOrEmpty($Value)) { return "" }
+    $secure = ConvertTo-SecureString -String $Value -AsPlainText -Force
+    return (ConvertFrom-SecureString -SecureString $secure)
+}
+
+function Unprotect-RemoteAccessSecret {
+    param([string] $Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+    try {
+        $secure = ConvertTo-SecureString -String $Value
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try {
+            return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        } finally {
+            if ($bstr -ne [IntPtr]::Zero) {
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            }
+        }
+    } catch {
+        return ""
+    }
+}
+
+function Load-RemoteAccessSecrets {
+    $defaults = [ordered]@{
+        JumpPassword = ""
+        TargetPassword = ""
+        VncPassword = ""
+    }
+    $path = Get-RemoteAccessSecretsPath
+    if (-not (Test-Path -LiteralPath $path)) { return [pscustomobject]$defaults }
+
+    try {
+        $data = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        foreach ($name in @("JumpPassword", "TargetPassword", "VncPassword")) {
+            if ($data.PSObject.Properties.Name -contains $name) {
+                $defaults[$name] = Unprotect-RemoteAccessSecret ([string]$data.$name)
+            }
+        }
+    } catch {
+        # Keep the manager usable if the local secrets file is missing or stale.
+    }
+    [pscustomobject]$defaults
+}
+
+function Save-RemoteAccessSecrets {
+    param(
+        [string] $JumpPassword,
+        [string] $TargetPassword,
+        [string] $VncPassword
+    )
+
+    $safe = [ordered]@{
+        JumpPassword = Protect-RemoteAccessSecret $JumpPassword
+        TargetPassword = Protect-RemoteAccessSecret $TargetPassword
+        VncPassword = Protect-RemoteAccessSecret $VncPassword
+    }
+    $safe | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Get-RemoteAccessSecretsPath) -Encoding UTF8
+}
+
+$Secrets = Load-RemoteAccessSecrets
 
 function Test-Port {
     param([int] $Port)
@@ -201,16 +369,124 @@ function Get-StatusText {
     return ($lines -join [Environment]::NewLine)
 }
 
-function Refresh-Status {
-    $statusBox.Text = Get-StatusText
+function Get-ConnectionState {
+    Update-ConfigFromForm
+    $mounted = Test-RemoteAccessMount -Config $Config
+    $ssh = Test-Port ([int]$Config.LocalSshPort)
+    $vnc = Test-Port ([int]$Config.LocalVncPort)
+
+    $state = if ($mounted -and $ssh -and $vnc) {
+        "Connected"
+    } elseif ($mounted -or $ssh -or $vnc) {
+        "Partial"
+    } else {
+        "Disconnected"
+    }
+
+    [pscustomobject]@{
+        State = $state
+        Mounted = $mounted
+        Ssh = $ssh
+        Vnc = $vnc
+    }
 }
 
-$form = New-Object System.Windows.Forms.Form
+function New-StatusIcon {
+    param([string] $State)
+
+    $color = switch ($State) {
+        "Connected" { [System.Drawing.Color]::FromArgb(32, 168, 90) }
+        "Partial" { [System.Drawing.Color]::FromArgb(235, 166, 35) }
+        default { [System.Drawing.Color]::FromArgb(210, 64, 52) }
+    }
+
+    $bitmap = New-Object System.Drawing.Bitmap 16, 16
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+
+    $backBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(34, 42, 54))
+    $stateBrush = New-Object System.Drawing.SolidBrush($color)
+    $whitePen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, 1)
+    $graphics.FillRectangle($backBrush, 1, 1, 14, 14)
+    $graphics.DrawRectangle($whitePen, 1, 1, 14, 14)
+    $graphics.FillEllipse($stateBrush, 8, 8, 7, 7)
+
+    $handle = $bitmap.GetHicon()
+    $icon = ([System.Drawing.Icon]::FromHandle($handle)).Clone()
+    [void][RemoteAccessNativeWindow]::DestroyIcon($handle)
+    $graphics.Dispose()
+    $backBrush.Dispose()
+    $stateBrush.Dispose()
+    $whitePen.Dispose()
+    $bitmap.Dispose()
+    return $icon
+}
+
+function Update-TrayStatusIcon {
+    if (-not $script:TrayIcon) { return }
+    $state = Get-ConnectionState
+    $oldIcon = $script:TrayIcon.Icon
+    $script:TrayIcon.Icon = New-StatusIcon -State $state.State
+    $script:TrayIcon.Text = "Remote Access Manager: $($state.State)"
+    if ($oldIcon) { $oldIcon.Dispose() }
+}
+
+function Refresh-Status {
+    $statusBox.Text = Get-StatusText
+    Update-TrayStatusIcon
+}
+
+function Show-MainWindow {
+    if (-not $form.Visible) {
+        $form.Show()
+    }
+    if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
+        $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+    }
+    $form.Activate()
+}
+
+$script:AllowManagerExit = $false
+
+$form = New-Object RemoteAccessTrayForm
 $form.Text = $Config.ToolName
 $form.Size = New-Object System.Drawing.Size(560, 485)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
+
+$script:TrayIcon = New-Object System.Windows.Forms.NotifyIcon
+$trayIconPath = Join-Path $Root "remote_access_manager.ico"
+if (Test-Path -LiteralPath $trayIconPath) {
+    $script:TrayIcon.Icon = New-Object System.Drawing.Icon($trayIconPath)
+} else {
+    $script:TrayIcon.Icon = [System.Drawing.SystemIcons]::Application
+}
+$script:TrayIcon.Text = "Remote Access Manager"
+$script:TrayIcon.Visible = $true
+$trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$trayShow = New-Object System.Windows.Forms.ToolStripMenuItem "Show"
+$trayRefresh = New-Object System.Windows.Forms.ToolStripMenuItem "Refresh"
+$trayExit = New-Object System.Windows.Forms.ToolStripMenuItem "Exit Manager"
+$trayShow.Add_Click({ Show-MainWindow })
+$trayRefresh.Add_Click({ Refresh-Status })
+$trayExit.Add_Click({
+    $script:AllowManagerExit = $true
+    $form.AllowExit = $true
+    $form.Close()
+})
+[void]$trayMenu.Items.Add($trayShow)
+[void]$trayMenu.Items.Add($trayRefresh)
+[void]$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$trayMenu.Items.Add($trayExit)
+$script:TrayIcon.ContextMenuStrip = $trayMenu
+$script:TrayIcon.Add_DoubleClick({ Show-MainWindow })
+
+$script:TrayStatusTimer = New-Object System.Windows.Forms.Timer
+$script:TrayStatusTimer.Interval = 10000
+$script:TrayStatusTimer.Add_Tick({ Update-TrayStatusIcon })
+$script:TrayStatusTimer.Start()
 
 $title = New-Object System.Windows.Forms.Label
 $title.Text = $Config.ToolName
@@ -230,7 +506,7 @@ Add-History $txtJumpUser @($Config.JumpUser, "your-jump-user")
 $form.Controls.Add($txtJumpUser)
 
 Add-Label "Jump password" 20 88
-$txtJumpPassword = New-TextBox 120 85 95 "" -Password
+$txtJumpPassword = New-TextBox 120 85 95 $Secrets.JumpPassword -Password
 $form.Controls.Add($txtJumpPassword)
 Add-PasswordToggle $txtJumpPassword 222 85
 
@@ -245,7 +521,7 @@ Add-History $txtTargetUser @($Config.TargetUser, "your-target-user")
 $form.Controls.Add($txtTargetUser)
 
 Add-Label "Target password" 20 157
-$txtTargetPassword = New-TextBox 120 154 95 "" -Password
+$txtTargetPassword = New-TextBox 120 154 95 $Secrets.TargetPassword -Password
 $form.Controls.Add($txtTargetPassword)
 Add-PasswordToggle $txtTargetPassword 222 154
 
@@ -271,7 +547,7 @@ Add-FileBrowseButton $txtIdentity 380 248
 Add-ClearButton $txtIdentity 452 248
 
 Add-Label "VNC password" 20 256
-$txtVncPassword = New-TextBox 120 253 95 "" -Password
+$txtVncPassword = New-TextBox 120 253 95 $Secrets.VncPassword -Password
 $form.Controls.Add($txtVncPassword)
 Add-PasswordToggle $txtVncPassword 222 253
 
@@ -291,6 +567,7 @@ $btnMount.Size = New-Object System.Drawing.Size(95, 34)
 $btnMount.Add_Click({
     Update-ConfigFromForm
     Save-RemoteAccessConfig -Config $Config
+    Save-RemoteAccessSecrets -JumpPassword $txtJumpPassword.Text -TargetPassword $txtTargetPassword.Text -VncPassword $txtVncPassword.Text
     $statusBox.Text = "Connecting drive and VNC. Please wait..."
     $form.Refresh()
     $envMap = Get-RunEnvironment
@@ -341,6 +618,7 @@ $btnVnc.Size = New-Object System.Drawing.Size(80, 34)
 $btnVnc.Add_Click({
     Update-ConfigFromForm
     Save-RemoteAccessConfig -Config $Config
+    Save-RemoteAccessSecrets -JumpPassword $txtJumpPassword.Text -TargetPassword $txtTargetPassword.Text -VncPassword $txtVncPassword.Text
     Run-HiddenPowerShell -ScriptPath $OpenVncScript -Environment (Get-RunEnvironment) | Out-Null
     Refresh-Status
 })
@@ -353,5 +631,46 @@ $btnRefresh.Size = New-Object System.Drawing.Size(85, 34)
 $btnRefresh.Add_Click({ Refresh-Status })
 $form.Controls.Add($btnRefresh)
 
-$form.Add_Shown({ Refresh-Status })
-[void]$form.ShowDialog()
+$form.Add_Shown({
+    Refresh-Status
+    $script:TrayIcon.Visible = $true
+})
+$form.Add_Resize({
+    if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
+        $form.Hide()
+        $script:TrayIcon.ShowBalloonTip(
+            1500,
+            "Remote Access Manager",
+            "Manager is in the tray. Existing SSH/VNC sessions are unchanged.",
+            [System.Windows.Forms.ToolTipIcon]::Info
+        )
+    }
+})
+$form.Add_FormClosing({
+    param($Sender, $EventArgs)
+    if (-not $script:AllowManagerExit) {
+        $EventArgs.Cancel = $true
+        $form.Hide()
+        $script:TrayIcon.ShowBalloonTip(
+            1500,
+            "Remote Access Manager",
+            "Manager is still running in the tray. Existing SSH/VNC sessions are unchanged.",
+            [System.Windows.Forms.ToolTipIcon]::Info
+        )
+    }
+})
+$form.Add_FormClosed({
+    if ($script:TrayStatusTimer) {
+        $script:TrayStatusTimer.Stop()
+        $script:TrayStatusTimer.Dispose()
+    }
+    if ($script:TrayIcon) {
+        $script:TrayIcon.Visible = $false
+        $script:TrayIcon.Dispose()
+    }
+    if ($script:AppMutex) {
+        try { $script:AppMutex.ReleaseMutex() } catch {}
+        $script:AppMutex.Dispose()
+    }
+})
+[System.Windows.Forms.Application]::Run($form)

@@ -1,5 +1,7 @@
 config.local.json
 config.local.*.json
+config.secrets.json
+config.secrets.*.json
 logs/
 archive/
 *.lnk
