@@ -1,14 +1,46 @@
 $ErrorActionPreference = "Continue"
 
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+function Get-ToolRoot {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        [void]$candidates.Add($PSScriptRoot)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
+        [void]$candidates.Add((Split-Path -Parent $MyInvocation.MyCommand.Path))
+    }
+    if (-not [string]::IsNullOrWhiteSpace([System.AppDomain]::CurrentDomain.BaseDirectory)) {
+        [void]$candidates.Add([System.AppDomain]::CurrentDomain.BaseDirectory)
+    }
+
+    $processPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if (-not [string]::IsNullOrWhiteSpace($processPath)) {
+        [void]$candidates.Add((Split-Path -Parent $processPath))
+    }
+    [void]$candidates.Add((Get-Location).Path)
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if (Test-Path -LiteralPath (Join-Path $candidate "scripts\RemoteAccessConfig.ps1")) {
+            return $candidate
+        }
+    }
+
+    throw "Could not find scripts\RemoteAccessConfig.ps1 next to this tool."
+}
+
+$Root = Get-ToolRoot
 . (Join-Path $Root "scripts\RemoteAccessConfig.ps1")
 
 $MountScript = Join-Path $Root "mount_T_now.ps1"
 $UnmountScript = Join-Path $Root "unmount_T.ps1"
 $OpenVncScript = Join-Path $Root "open_vnc_viewer.ps1"
+$RestoreScript = Join-Path $Root "restore_now.ps1"
 $Config = Get-RemoteAccessConfig
 
 function Test-Port {
@@ -259,12 +291,14 @@ $btnMount.Size = New-Object System.Drawing.Size(95, 34)
 $btnMount.Add_Click({
     Update-ConfigFromForm
     Save-RemoteAccessConfig -Config $Config
-    $statusBox.Text = "Mounting $($Config.DriveLetter). Please wait..."
+    $statusBox.Text = "Connecting drive and VNC. Please wait..."
     $form.Refresh()
-    $code = Run-HiddenPowerShell -ScriptPath $MountScript -Environment (Get-RunEnvironment)
+    $envMap = Get-RunEnvironment
+    $envMap["REMOTE_ACCESS_AUTO_MOUNT_T"] = "1"
+    $code = Run-HiddenPowerShell -ScriptPath $RestoreScript -Environment $envMap
     Refresh-Status
     if ($code -ne 0) {
-        [System.Windows.Forms.MessageBox]::Show("$($Config.DriveLetter) mount failed. Check logs folder.", "Mount", "OK", "Warning") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Connect failed. Check logs folder.", "Connect", "OK", "Warning") | Out-Null
     }
 })
 $form.Controls.Add($btnMount)
